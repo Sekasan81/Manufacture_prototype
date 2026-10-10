@@ -39,6 +39,6 @@
 - `src/effects.mjs` — специальные эффекты.
 - `src/app.mjs`, `style.css`, `index.html` — интерфейс и оригинальные векторные слизни.
 - `tests/engine.test.mjs` — проверки механики.
-- `docs/factory-system.txt` — исходный дизайн-документ, не читается игрой во время работы.
+- `docs/VERIFICATION.md` — результаты проверок и ограничения.
 
 Механический референс: [Monster Girl Factory](https://quiet-crucible.itch.io/monster-girl-factory). Иллюстрации и интерфейс созданы для этого прототипа, материалы референса не копируются. Шрифт Golos Text загружается с Google Fonts; при отсутствии сети используется системный шрифт.
