@@ -1,28 +1,21 @@
 export const RESOURCES = {
-  iron: { name: 'Железо', symbol: 'Fe', color: '#b8c6c4' },
-  steel: { name: 'Сталь', symbol: 'St', color: '#8dabe1' },
-  ironIngot: { name: 'Железный слиток', symbol: 'Fe▰', color: '#e1c49b' },
-  steelIngot: { name: 'Стальной слиток', symbol: 'St▰', color: '#c8b6e9' },
+ copper:{name:'Медь',symbol:'Cu',color:'#c28f62'}, iron:{name:'Железо',symbol:'Fe',color:'#95a8a7'},
+ steel:{name:'Сталь',symbol:'St',color:'#789db6'}, gold:{name:'Золото',symbol:'Au',color:'#d2ac41'},
+ platinum:{name:'Платина',symbol:'Pt',color:'#bda3ce'}, titanium:{name:'Титан',symbol:'Ti',color:'#86afbb'},
+ alloy:{name:'Космический сплав',symbol:'✧',color:'#97b96e'}
 };
-export const RESONANCES = [
-  { id: 'sun', name: 'Солнечный', symbol: '●', color: '#e5b04b' },
-  { id: 'tide', name: 'Приливный', symbol: '≈', color: '#619ccf' },
-  { id: 'spore', name: 'Споровый', symbol: '◆', color: '#bd80bd' },
-];
-export const RECIPES = {
-  iron: { input: 'iron', output: 'ironIngot', amount: 1, yield: 1, cycle: 4 },
-  steel: { input: 'steel', output: 'steelIngot', amount: 1, yield: 1, cycle: 4 },
+export const RESONANCES=[{name:'Шестерня',symbol:'⚙',color:'#be915b'},{name:'Молоток',symbol:'⚒',color:'#9180b5'},{name:'Молния',symbol:'ϟ',color:'#cdad42'},{name:'Лазер',symbol:'⌁',color:'#639bad'}];
+export const ROLES={producer:{name:'Производитель',cycle:2,yield:1},assembler:{name:'Сборщик',cycle:3,amount:2,yield:1},crafter:{name:'Крафтер'},booster:{name:'Усилитель',effect:'doubleOutput'}};
+export const SPECIES={
+ copper:{name:'Производитель меди',short:'Медник',role:'producer',output:'copper',color:'#d1a169'},
+ iron:{name:'Производитель железа',short:'Феррик',role:'producer',output:'iron',color:'#a7b7a1'},
+ steel:{name:'Сборщик стали',short:'Феррит',role:'assembler',input:'iron',output:'steel',color:'#7aaabd'},
+ gold:{name:'Производитель золота',short:'Аурум',role:'producer',output:'gold',color:'#dec15e'},
+ booster:{name:'Усилитель',short:'Спарк',role:'booster',color:'#9fbd73'},
+ platinum:{name:'Сборщик платины',short:'Платик',role:'assembler',input:'gold',output:'platinum',color:'#b8a1cc'},
+ crafter:{name:'Крафтер',short:'Дирижёр',role:'crafter',color:'#b596cb'},
+ titanium:{name:'Производитель титана',short:'Титаник',role:'producer',output:'titanium',color:'#83bac2'},
+ alloy:{name:'Сборщик космического сплава',short:'Космик',role:'assembler',input:'titanium',output:'alloy',color:'#b5c57f'}
 };
-export const SPECIES = {
-  producer: { name: 'Производитель', nickname: 'Феррик', code: 'П', role: 'producer', color: '#dcac50', power: 10, cycle: 2, output: 'iron', yield: 1, description: 'Выращивает железо. Нужна связь с переработчиком или крафтером.' },
-  processor: { name: 'Переработчик', nickname: 'Феррит', code: 'Р', role: 'processor', color: '#7aaabd', power: 10, cycle: 3, input: 'iron', amount: 1, output: 'steel', yield: 1, description: 'Превращает железо в сталь. Нужны одновременно производитель и крафтер.' },
-  crafter: { name: 'Крафтер', nickname: 'Формер', code: 'К', role: 'crafter', color: '#b596cb', power: 10, recipes: ['iron', 'steel'], description: 'Формирует слитки. Рецепт должен соответствовать подключённому источнику.' },
-  booster: { name: 'Усилитель', nickname: 'Спарк', code: 'У', role: 'booster', color: '#9fbd73', power: 10, effect: 'resonanceBoost', description: 'Усиливает каждого подходящего соседа: +1 выход или −2 секунды у крафтера. Бонусы не складываются.' },
-};
-export function createUnits() {
-  return Object.keys(SPECIES).flatMap((species, group) => Array.from({ length: 3 }, (_, i) => ({
-    id: `${group + 1}-${i + 1}`, species, cell: null,
-    sides: [i % 3, (i + 1) % 3, (i + 2) % 3, (i + 1) % 3],
-    progress: 0, recipe: 'iron', completed: 0,
-  })));
-}
+export const SHOP=[{species:'iron',cost:{copper:10}},{species:'steel',cost:{copper:10,iron:10}},{species:'gold',cost:{steel:10}},{species:'booster',cost:{gold:10}},{species:'platinum',cost:{steel:10,gold:10}},{species:'crafter',cost:{platinum:10}},{species:'titanium',cost:{platinum:10}},{species:'alloy',cost:{titanium:10}}];
+export function definition(u){const d=SPECIES[u.species];return {...ROLES[d.role],...d};}

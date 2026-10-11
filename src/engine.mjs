@@ -1,120 +1,107 @@
-import { SIZE, connections, rotate } from './connections.mjs';
-import { SPECIES, RESOURCES, RECIPES, createUnits } from './data.mjs';
-import { EFFECTS } from './effects.mjs';
-export const LIMIT = 9999;
-export const STEP = 0.05;
-export function createState() {
-  return { version: 1, units: createUnits(), stock: Object.fromEntries(Object.keys(RESOURCES).map(key => [key, 0])), capacity: 100, paused: false, elapsed: 0, remainder: 0, log: [] };
+import {connections,rotate} from './connections.mjs';
+import {SPECIES,RESOURCES,SHOP,definition} from './data.mjs?v=3';
+import {cycleOutput} from './effects.mjs?v=3';
+export const STEP=.1, LIMIT=9999, CAPACITY=120;
+export function random(s){let x=s.rng|0;x^=x<<13;x^=x>>>17;x^=x<<5;s.rng=x>>>0;return s.rng/4294967296;}
+const sides=s=>Array.from({length:4},()=>Math.floor(random(s)*4));
+export function addUnit(s,species){if(!SPECIES[species])throw new Error('Неизвестный вид');const u={id:String(s.nextId++),species,cell:null,sides:sides(s),rotation:0,progress:0,running:false,boosted:false,buffer:0,queue:0,completed:0};s.units.push(u);return u;}
+export function createState(seed=Date.now()){
+ const s={version:2,rng:(Number(seed)>>>0)||1,nextId:1,units:[],stock:Object.fromEntries(Object.keys(RESOURCES).map(k=>[k,0])),elapsed:0,remainder:0,paused:false,log:[],savedAt:Date.now()};
+ const p=addUnit(s,'copper'),c=addUnit(s,'crafter');while(!p.sides.some(r=>c.sides.includes(r))){p.sides=sides(s);c.sides=sides(s);}return s;
 }
-export function power(state) {
-  const used = state.units.filter(u => u.cell !== null).reduce((sum, u) => sum + SPECIES[u.species].power, 0);
-  return { used, capacity: state.capacity, remaining: state.capacity - used };
-}
-export function statsFor(unit, neighbors) {
-  const def = SPECIES[unit.species];
-  let stats = { ...def, ...(def.role === 'crafter' ? RECIPES[unit.recipe] : {}) };
-  const effects = new Set(neighbors.filter(u => SPECIES[u.species].role === 'booster').map(u => SPECIES[u.species].effect));
-  for (const effect of effects) if (EFFECTS[effect]) stats = EFFECTS[effect](stats, def.role);
-  return { ...stats, boosted: effects.size > 0 && def.role !== 'booster' };
-}
-export function evaluate(state) {
-  const links = connections(state.units), energy = power(state);
-  const map = new Map(state.units.map(unit => [unit.id, unit]));
-  const result = new Map();
-  for (const unit of state.units) {
-    const edges = links.get(unit.id);
-    const neighbors = edges.map(edge => map.get(edge.id));
-    const stats = statsFor(unit, neighbors);
-    const compatibleSource = neighbors.some(n => ['producer', 'processor'].includes(SPECIES[n.species].role) && SPECIES[n.species].output === stats.input);
-    let reason = '', kind = 'active';
-    if (unit.cell === null) { kind = 'reserve'; reason = 'В каталоге'; }
-    else if (energy.remaining < 0) { kind = 'power'; reason = 'Перегрузка генератора'; }
-    else if (state.paused) { kind = 'paused'; reason = 'Общая пауза'; }
-    else if (stats.role === 'producer' && !neighbors.some(n => {
-      const other = SPECIES[n.species];
-      return (other.role === 'processor' && other.input === stats.output) || (other.role === 'crafter' && other.recipes.some(r => RECIPES[r].input === stats.output));
-    })) { kind = 'disconnected'; reason = 'Нужен переработчик или крафтер'; }
-    else if (stats.role === 'processor' && !neighbors.some(n => SPECIES[n.species].role === 'producer' && SPECIES[n.species].output === stats.input)) { kind = 'disconnected'; reason = 'Нет связи с производителем'; }
-    else if (stats.role === 'processor' && !neighbors.some(n => SPECIES[n.species].role === 'crafter' && SPECIES[n.species].recipes.some(r => RECIPES[r].input === stats.output))) { kind = 'disconnected'; reason = 'Нет связи с крафтером'; }
-    else if (stats.role === 'crafter' && !compatibleSource) { kind = 'recipe'; reason = 'Нет источника для выбранного рецепта'; }
-    else if (stats.role === 'booster' && !neighbors.some(n => SPECIES[n.species].role !== 'booster')) { kind = 'disconnected'; reason = 'Нет соседа для усиления'; }
-    else if (stats.input && state.stock[stats.input] < stats.amount) { kind = 'waiting'; reason = `Ждёт: ${RESOURCES[stats.input].name.toLowerCase()}`; }
-    else reason = stats.role === 'booster' ? 'Усиливает соседей' : 'Производство';
-    result.set(unit.id, { kind, reason, stats, edges, neighbors, active: kind === 'active' });
+export const power=s=>({used:s.units.filter(u=>u.cell!==null).length*10,capacity:CAPACITY,remaining:CAPACITY-s.units.filter(u=>u.cell!==null).length*10});
+export function topology(s){
+ const links=connections(s.units), map=new Map(s.units.map(u=>[u.id,u])), graph=new Map();
+ const neighbors=u=>links.get(u.id).map(e=>({...e,unit:map.get(e.id)}));
+ for(const u of s.units){
+  const d=definition(u),ns=neighbors(u),routes=[],receivers=[];
+  if(d.role==='producer')for(const n of ns){
+   const nd=definition(n.unit);
+   if(nd.role==='crafter'){routes.push([u.id,n.id]);receivers.push(n);}
+   else if(nd.role==='assembler'&&nd.input===d.output){
+    const cs=neighbors(n.unit).filter(c=>definition(c.unit).role==='crafter');
+    if(cs.length){receivers.push(n);for(const c of cs)routes.push([u.id,n.id,c.id]);}
+   }
   }
-  return result;
-}
-export function advance(state, seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0 || state.paused) return;
-  // Fixed simulation steps make speed and frame rate independent of contention order.
-  state.remainder += seconds;
-  const count = Math.floor((state.remainder + 1e-9) / STEP);
-  state.remainder = Math.max(0, state.remainder - count * STEP);
-  const ordered = [...state.units].sort((a, b) => a.id.localeCompare(b.id));
-  for (let tick = 0; tick < count; tick++) {
-    state.elapsed += STEP;
-    if (power(state).remaining < 0) continue;
-    const statuses = evaluate(state);
-    for (const unit of ordered) {
-      const status = statuses.get(unit.id), stats = status.stats;
-      if (!status.active || !stats.cycle || !stats.output) continue;
-      // Inputs remain in the shared store until completion, never in a private buffer.
-      if (stats.input && state.stock[stats.input] < stats.amount) continue;
-      unit.progress += STEP;
-      if (unit.progress + 1e-9 < stats.cycle) continue;
-      if (stats.input) state.stock[stats.input] -= stats.amount;
-      state.stock[stats.output] = Math.min(LIMIT, state.stock[stats.output] + stats.yield);
-      unit.progress = 0;
-      unit.completed++;
-      state.log.unshift({ time: state.elapsed, id: unit.id, resource: stats.output, amount: stats.yield });
-      state.log.length = Math.min(state.log.length, 24);
-    }
+  if(d.role==='assembler'){
+   const ps=ns.filter(n=>definition(n.unit).role==='producer'&&definition(n.unit).output===d.input);
+   const cs=ns.filter(n=>definition(n.unit).role==='crafter');
+   for(const p of ps)for(const c of cs)routes.push([p.id,u.id,c.id]);
+   if(ps.length)receivers.push(...cs);
   }
+  graph.set(u.id,{routes,receivers,neighbors:ns,edges:links.get(u.id),boost:ns.some(n=>definition(n.unit).role==='booster')});
+ }return graph;
 }
-export function place(state, id, cell) {
-  const unit = state.units.find(u => u.id === id);
-  if (!unit || !Number.isInteger(cell) || cell < 0 || cell >= SIZE * SIZE || state.units.some(u => u.id !== id && u.cell === cell)) return false;
-  unit.cell = cell; return true;
+function cancel(u){u.running=false;u.progress=0;u.boosted=false;u.queue=0;}
+function start(s,u,g){const d=definition(u);if(s.paused||power(s).remaining<0||!d.cycle||u.running||!g.routes.length)return false;if(d.role==='assembler'){if(u.buffer<d.amount)return false;u.buffer-=d.amount;}u.running=true;u.progress=0;u.boosted=g.boost;return true;}
+export function reconcile(s,before=topology(s),moved=[]){
+ const after=topology(s),badPower=power(s).remaining<0;
+ for(const u of s.units){const old=before.get(u.id),g=after.get(u.id),d=definition(u);
+  const untouched=old?.routes.some(route=>!route.some(id=>moved.includes(id))&&g.routes.some(r=>r.join('/')===route.join('/')));
+  if(u.running&&(!untouched||badPower||(u.boosted&&!g.boost)))cancel(u);
+  if(!g.routes.length&&d.role==='assembler')u.buffer=0;
+  if(!old||old.receivers.map(n=>n.id).join(',')!==g.receivers.map(n=>n.id).join(','))u.queue=0;
+  if(badPower)cancel(u);
+ }
+ for(const u of s.units)start(s,u,after.get(u.id));
+ return after;
 }
-export function remove(state, id) { const unit = state.units.find(u => u.id === id); if (unit) unit.cell = null; }
-export function turn(state, id, clockwise = true) { const unit = state.units.find(u => u.id === id); if (unit) unit.sides = rotate(unit.sides, clockwise); }
-export function setResonance(state, id, side, resonance) {
-  const unit = state.units.find(u => u.id === id);
-  if (unit && Number.isInteger(side) && side >= 0 && side < 4 && Number.isInteger(resonance) && resonance >= 0 && resonance < 3) unit.sides[side] = resonance;
+export function mutate(s,fn,moved=[]){const old=topology(s);fn();reconcile(s,old,moved);}
+export function place(s,id,cell){
+ const u=s.units.find(u=>u.id===id);if(!u||!Number.isInteger(cell)||cell<0||cell>=36)return false;if(u.cell===cell)return true;
+ const other=s.units.find(o=>o.cell===cell),old=u.cell;
+ mutate(s,()=>{u.cell=cell;if(other)other.cell=old;},[u.id,...(other?[other.id]:[])]);return true;
 }
-export function setRecipe(state, id, recipe) {
-  const unit = state.units.find(u => u.id === id);
-  if (!unit || !SPECIES[unit.species].recipes?.includes(recipe)) return false;
-  if (unit.recipe !== recipe) { unit.recipe = recipe; unit.progress = 0; }
-  return true;
-}
-export function demoState() {
-  const state = createState();
-  const positions = { '1-1': 13, '2-1': 14, '3-1': 15, '4-1': 8, '1-2': 25, '3-2': 26 };
-  for (const unit of state.units) if (positions[unit.id] !== undefined) {
-    unit.cell = positions[unit.id]; unit.sides = [0, 1, 2, 1];
+export function remove(s,id){const u=s.units.find(u=>u.id===id);if(!u||u.cell===null)return false;mutate(s,()=>u.cell=null,[id]);return true;}
+export function turn(s,id){const u=s.units.find(u=>u.id===id);if(!u||u.cell===null)return false;mutate(s,()=>{u.sides=rotate(u.sides);u.rotation=(u.rotation+1)%4;});return true;}
+export function rerollCost(s,u){return u.species==='copper'&&s.stock.copper<5?0:5;}
+export function reroll(s,id){const u=s.units.find(u=>u.id===id);if(!u||u.cell===null)return false;const cost=rerollCost(s,u);if(s.stock.copper<cost)return false;mutate(s,()=>{s.stock.copper-=cost;u.sides=sides(s);});return true;}
+export function shortages(s,item){return Object.entries(item.cost).filter(([r,n])=>s.stock[r]<n).map(([resource,n])=>({resource,amount:n-s.stock[resource]}));}
+export function buy(s,species){const item=SHOP.find(i=>i.species===species);if(!item||shortages(s,item).length)return null;for(const [r,n] of Object.entries(item.cost))s.stock[r]-=n;return addUnit(s,species);}
+function deposit(s,u,resource,amount,receiver){const accepted=Math.min(amount,LIMIT-s.stock[resource]);s.stock[resource]+=accepted;s.log.unshift({time:s.elapsed,id:u.id,resource,amount:accepted,lost:amount-accepted,receiver});s.log.length=Math.min(12,s.log.length);}
+export function advance(s,seconds){
+ if(!Number.isFinite(seconds)||seconds<=0||s.paused)return;
+ const g=reconcile(s);s.remainder+=seconds;const ticks=Math.floor((s.remainder+1e-8)/STEP);s.remainder=Math.max(0,s.remainder-ticks*STEP);
+ const ordered=s.units.filter(u=>u.cell!==null).sort((a,b)=>a.cell-b.cell),canRun=power(s).remaining>=0;
+ for(let t=0;t<ticks;t++){
+  s.elapsed+=STEP;if(!canRun)continue;
+  const deliveries=new Map();
+  // Complete and deliver in row-major order. A free assembler can reserve one cycle
+  // plus one next-cycle buffer; the reservation is consumed in phase two.
+  for(const u of ordered){
+   if(!u.running)continue;const d=definition(u);u.progress+=STEP;if(u.progress+1e-8<d.cycle)continue;
+   u.running=false;u.progress=0;u.completed++;
+   const targets=g.get(u.id).receivers,target=targets[u.queue%targets.length];u.queue=(u.queue+1)%targets.length;
+   const amount=cycleOutput(d,u.boosted);u.boosted=false;
+   if(d.role==='producer'&&definition(target.unit).role==='assembler'){
+    const a=target.unit,need=definition(a).amount;
+    const current=deliveries.get(a.id)??a.buffer;
+    deliveries.set(a.id,Math.min(a.running?need:need*2,current+amount));
+   }else deposit(s,u,d.output,amount,target.id);
   }
-  state.units.find(u => u.id === '4-1').sides[2] = 0;
-  state.units.find(u => u.id === '3-1').recipe = 'steel';
-  return state;
+  for(const u of ordered){if(deliveries.has(u.id))u.buffer=deliveries.get(u.id);start(s,u,g.get(u.id));if(definition(u).role==='assembler')u.buffer=Math.min(definition(u).amount,u.buffer);}
+ }
 }
-export function restore(text) {
-  const saved = JSON.parse(text), clean = createState();
-  if (saved.version !== 1 || !Array.isArray(saved.units) || saved.units.length !== 12) throw new Error('Неподдерживаемое сохранение');
-  const cells = new Set(), ids = new Set();
-  for (const unit of clean.units) {
-    const source = saved.units.find(u => u.id === unit.id);
-    if (!source || ids.has(source.id) || source.species !== unit.species || !Array.isArray(source.sides) || source.sides.length !== 4 || source.sides.some(s => !Number.isInteger(s) || s < 0 || s > 2)) throw new Error('Некорректный слизень');
-    if (source.cell !== null && (!Number.isInteger(source.cell) || source.cell < 0 || source.cell > 35 || cells.has(source.cell))) throw new Error('Некорректная клетка');
-    ids.add(source.id); if (source.cell !== null) cells.add(source.cell);
-    unit.cell = source.cell; unit.sides = [...source.sides];
-    unit.recipe = RECIPES[source.recipe] ? source.recipe : 'iron';
-    unit.progress = Number.isFinite(source.progress) ? Math.max(0, Math.min(4, source.progress)) : 0;
-    unit.completed = Number.isSafeInteger(source.completed) ? Math.max(0, source.completed) : 0;
-  }
-  for (const key of Object.keys(RESOURCES)) clean.stock[key] = Number.isFinite(saved.stock?.[key]) ? Math.max(0, Math.min(LIMIT, Math.floor(saved.stock[key]))) : 0;
-  clean.capacity = [60, 80, 100, 120, 150].includes(saved.capacity) ? saved.capacity : 100;
-  clean.elapsed = Number.isFinite(saved.elapsed) ? Math.max(0, saved.elapsed) : 0;
-  clean.paused = saved.paused === true;
-  return clean;
+export function evaluate(s){const graph=topology(s),energy=power(s),result=new Map();for(const u of s.units){const d=definition(u),g=graph.get(u.id);let kind='active',reason='Производство';
+ if(u.cell===null){kind='reserve';reason='В каталоге';}
+ else if(energy.remaining<0){kind='power';reason='Перегрузка — циклы сброшены';}
+ else if(s.paused){kind='paused';reason='Пауза';}
+ else if(d.cycle&&!g.routes.length){kind='disconnected';reason=d.role==='producer'?'Нет полного маршрута A или B':'Нужны подходящий производитель и крафтер';}
+ else if(d.role==='assembler'&&!u.running){kind='waiting';reason=`Ждёт сырьё: ${u.buffer} / ${d.amount}`;}
+ else if(d.role==='crafter'){const count=g.neighbors.filter(n=>graph.get(n.id).routes.some(r=>r.includes(u.id))).length;reason=`Активирует ${count} / 4 соседей`;kind=count?'active':'disconnected';}
+ else if(d.role==='booster'){const count=g.neighbors.filter(n=>definition(n.unit).cycle).length;reason=count?`Усиливает машин: ${count}`:'Нет производящих соседей';kind=count?'active':'disconnected';}
+ result.set(u.id,{...g,kind,reason,stats:d,active:kind==='active'});
+ }return result;}
+export function serialize(s,now=Date.now()){return JSON.stringify({...s,savedAt:now});}
+export function restore(text){
+ const x=JSON.parse(text);if(x.version!==2||!Array.isArray(x.units)||x.units.length>10000)throw new Error('Сохранение другой версии');
+ const s={version:2,rng:(x.rng>>>0)||1,nextId:1,units:[],stock:{},elapsed:Number.isFinite(x.elapsed)?Math.max(0,x.elapsed):0,remainder:0,paused:x.paused===true,log:[],savedAt:Number.isFinite(x.savedAt)?x.savedAt:Date.now()};
+ const ids=new Set(),cells=new Set();
+ for(const a of x.units){
+ if(!SPECIES[a.species]||!/^\d+$/.test(a.id)||ids.has(a.id)||!Array.isArray(a.sides)||a.sides.length!==4||a.sides.some(v=>!Number.isInteger(v)||v<0||v>3))throw new Error('Повреждённый экземпляр');
+ if(a.cell!==null&&(!Number.isInteger(a.cell)||a.cell<0||a.cell>35||cells.has(a.cell)))throw new Error('Повреждённая клетка');ids.add(a.id);if(a.cell!==null)cells.add(a.cell);
+ const d=definition(a),u={id:a.id,species:a.species,cell:a.cell,sides:[...a.sides],rotation:Number.isInteger(a.rotation)?((a.rotation%4)+4)%4:0,progress:Number.isFinite(a.progress)&&d.cycle?Math.max(0,Math.min(d.cycle,a.progress)):0,running:!!d.cycle&&a.running===true,boosted:a.boosted===true,buffer:d.amount&&Number.isFinite(a.buffer)?Math.max(0,Math.min(d.amount,Math.floor(a.buffer))):0,queue:Number.isSafeInteger(a.queue)?Math.max(0,a.queue):0,completed:Number.isSafeInteger(a.completed)?Math.max(0,a.completed):0};s.units.push(u);s.nextId=Math.max(s.nextId,+u.id+1);
+ }
+ for(const r of Object.keys(RESOURCES))s.stock[r]=Number.isFinite(x.stock?.[r])?Math.max(0,Math.min(LIMIT,Math.floor(x.stock[r]))):0;
+ s.remainder=Number.isFinite(x.remainder)?Math.max(0,Math.min(STEP,x.remainder)):0;reconcile(s);return s;
 }
